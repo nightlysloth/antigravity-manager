@@ -15,7 +15,7 @@ $(TARGET): src/antigravity-manager.c
 	$(CC) $(CFLAGS) $< -o $@
 
 test: $(TARGET)
-	./tests/smoke.sh ./$(TARGET)
+	bash tests/smoke.sh ./$(TARGET)
 
 install: $(TARGET)
 	install -Dm755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/$(TARGET)
