@@ -1,0 +1,12 @@
+# Build output
+/antigravity-manager
+/antigravity-manager.exe
+*.o
+*.obj
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
