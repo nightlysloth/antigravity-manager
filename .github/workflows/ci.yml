@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (warnings are errors)
+        run: make CFLAGS="-std=c11 -O2 -Wall -Wextra -Werror"
+      - name: Smoke tests
+        run: make test
+      - name: Help output
+        run: ./antigravity-manager --help
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build with MinGW-w64
+        run: gcc -std=c11 -O2 -Wall -Wextra src/antigravity-manager.c -o antigravity-manager.exe
+      - name: Help output
+        run: ./antigravity-manager.exe --help
