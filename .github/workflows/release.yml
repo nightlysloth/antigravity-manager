@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make
+      - run: mv antigravity-manager antigravity-manager-linux-x86_64
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: antigravity-manager-linux-x86_64
+          generate_release_notes: true
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - run: gcc -std=c11 -O2 -Wall -Wextra src/antigravity-manager.c -o antigravity-manager-windows-x86_64.exe
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: antigravity-manager-windows-x86_64.exe
+          generate_release_notes: true
