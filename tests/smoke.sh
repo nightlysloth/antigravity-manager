@@ -35,8 +35,10 @@ grep -q '"ideVersion": "2.6.0"' "$IDE/resources/app/product.json"
 [ ! -e "$HOME/Applications/antigravity-official/.agm-stage" ]
 
 echo "[3/3] a corrupt archive leaves the installation untouched"
+echo '{"ideVersion": "2.5.0"}' > "$IDE/resources/app/product.json"   # outdated vs. fixture (2.6.0)
 echo junk > "$TMP/bad.tar.gz"
-if "$BIN" --archive "$TMP/bad.tar.gz" --update ide --yes >/dev/null 2>&1; then exit 1; fi
-grep -q '"ideVersion": "2.6.0"' "$IDE/resources/app/product.json"
+if "$BIN" --page-file "$PAGE" --archive "$TMP/bad.tar.gz" --update ide --yes >/dev/null 2>&1; then exit 1; fi
+grep -q '"ideVersion": "2.5.0"' "$IDE/resources/app/product.json"
+[ -x "$IDE/antigravity-ide" ]
 
 echo "smoke tests passed"
