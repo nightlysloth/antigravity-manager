@@ -1,5 +1,5 @@
 /*
- * Antigravity Manager v2 - cross-platform installer/updater for Google's
+ * Antigravity Manager v1.0 - cross-platform installer/updater for Google's
  * Antigravity tools (App, IDE, CLI "agy", Python SDK).
  *
  * What it does
@@ -34,6 +34,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 
@@ -281,24 +282,97 @@ static int vercmp(const char *a, const char *b) {
     return 0;
 }
 
-static int json_get(const char *path, const char *key, char *out, size_t cap) {
-    char *buf = read_file(path, NULL), *p, pat[96];
+static int json_get_buf(const char *buf, const char *key, char *out, size_t cap) {
+    char pat[96];
+    const char *p;
     size_t i = 0;
-    if (!buf) return 0;
     snprintf(pat, sizeof pat, "\"%s\"", key);
     p = strstr(buf, pat);
-    if (!p) { free(buf); return 0; }
+    if (!p) return 0;
     p += strlen(pat);
     while (isspace((unsigned char)*p)) p++;
-    if (*p != ':') { free(buf); return 0; }
+    if (*p != ':') return 0;
     p++;
     while (isspace((unsigned char)*p)) p++;
-    if (*p != '"') { free(buf); return 0; }
+    if (*p != '"') return 0;
     p++;
     while (*p && *p != '"' && i + 1 < cap) out[i++] = *p++;
     out[i] = '\0';
-    free(buf);
     return i > 0;
+}
+
+static int json_get(const char *path, const char *key, char *out, size_t cap) {
+    char *buf = read_file(path, NULL);
+    int r;
+    if (!buf) return 0;
+    r = json_get_buf(buf, key, out, cap);
+    free(buf);
+    return r;
+}
+
+static uint32_t le32(const unsigned char *b) {
+    return (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+}
+
+/* The Antigravity App is an Electron app: its package.json lives inside
+ * resources/app.asar. Read just that one entry without unpacking anything. */
+static int asar_version(const char *dir, char *out, size_t cap) {
+    char path[PATH_MAX + 32];
+    unsigned char h[16];
+    char *js = NULL, *pkg = NULL;
+    const char *q, *entry = NULL, *end, *sz, *off;
+    uint32_t hsize, jlen;
+    unsigned long size;
+    unsigned long long offset;
+    int depth = 1, ok = 0;
+    FILE *f;
+    snprintf(path, sizeof path, "%s/resources/app.asar", dir);
+    f = fopen(path, "rb");
+    if (!f) return 0;
+    if (fread(h, 1, sizeof h, f) != sizeof h) goto fail;
+    hsize = le32(h + 4);
+    jlen = le32(h + 12);
+    if (jlen == 0 || jlen > 32u * 1024 * 1024) goto fail;
+    js = malloc((size_t)jlen + 1);
+    if (!js || fread(js, 1, jlen, f) != jlen) goto fail;
+    js[jlen] = '\0';
+    q = strstr(js, "\"files\"");
+    if (!q || !(q = strchr(q + 7, '{'))) goto fail;
+    q++;
+    while (*q && depth > 0) {          /* find "package.json" among the top-level entries */
+        if (*q == '"') {
+            const char *k = ++q;
+            while (*q && *q != '"') { if (*q == '\\' && q[1]) q++; q++; }
+            if (depth == 1 && (size_t)(q - k) == 12 && !strncmp(k, "package.json", 12)) { entry = q; break; }
+            if (*q) q++;
+        } else if (*q == '{') { depth++; q++; }
+        else if (*q == '}') { depth--; q++; }
+        else q++;
+    }
+    if (!entry || !(end = strchr(entry, '}'))) goto fail;
+    sz = strstr(entry, "\"size\":");
+    off = strstr(entry, "\"offset\":\"");
+    if (!sz || !off || sz > end || off > end) goto fail;
+    size = strtoul(sz + 7, NULL, 10);
+    offset = strtoull(off + 10, NULL, 10);
+    if (size == 0 || size > 1024 * 1024) goto fail;
+    pkg = malloc(size + 1);
+    if (!pkg || fseek(f, (long)(8 + hsize + offset), SEEK_SET) != 0 || fread(pkg, 1, size, f) != size) goto fail;
+    pkg[size] = '\0';
+    ok = json_get_buf(pkg, "version", out, cap);
+fail:
+    free(js);
+    free(pkg);
+    fclose(f);
+    return ok;
+}
+
+static int looks_installed(const char *dir) {
+    char p[PATH_MAX + 40];
+    snprintf(p, sizeof p, "%s/resources/app/product.json", dir);
+    if (exists(p)) return 1;
+    snprintf(p, sizeof p, "%s/resources/app.asar", dir);
+    return exists(p);
 }
 
 /* --------------------------------------------------- install detection */
@@ -309,7 +383,7 @@ static void env_override(int idx, char *out, size_t cap) {
 }
 
 static int find_install(int idx, char *out, size_t cap) {
-    char home[PATH_MAX], c[6][PATH_MAX];
+    char home[PATH_MAX], c[8][PATH_MAX];
     int n = 0, i;
     int ide = (idx == C_IDE);
     home_dir(home, sizeof home);
@@ -330,17 +404,15 @@ static int find_install(int idx, char *out, size_t cap) {
         snprintf(c[n++], PATH_MAX, "/opt/antigravity-ide");
         snprintf(c[n++], PATH_MAX, "/opt/Antigravity IDE");
     } else {
+        snprintf(c[n++], PATH_MAX, "%s/Applications/antigravity-app", home);
         snprintf(c[n++], PATH_MAX, "%s/.local/opt/antigravity-app", home);
         snprintf(c[n++], PATH_MAX, "%s/Applications/antigravity-official/Antigravity", home);
         snprintf(c[n++], PATH_MAX, "/opt/Antigravity");
         snprintf(c[n++], PATH_MAX, "/opt/antigravity");
     }
 #endif
-    for (i = 0; i < n; ++i) {
-        char pj[PATH_MAX + 32];
-        snprintf(pj, sizeof pj, "%s/resources/app/product.json", c[i]);
-        if (exists(pj)) { snprintf(out, cap, "%s", c[i]); return 1; }
-    }
+    for (i = 0; i < n; ++i)
+        if (looks_installed(c[i])) { snprintf(out, cap, "%s", c[i]); return 1; }
     return 0;
 }
 
@@ -362,7 +434,9 @@ static void default_target(int idx, char *out, size_t cap) {
 static void install_version(const char *dir, char *out, size_t cap) {
     char pj[PATH_MAX + 32];
     snprintf(pj, sizeof pj, "%s/resources/app/product.json", dir);
-    if (!json_get(pj, "ideVersion", out, cap)) snprintf(out, cap, "unknown");
+    if (json_get(pj, "ideVersion", out, cap)) return;
+    if (asar_version(dir, out, cap)) return;
+    snprintf(out, cap, "unknown");
 }
 
 static void venv_dir(char *out, size_t cap) {
@@ -409,7 +483,7 @@ static int cli_version(char *ver, size_t cap) {
 
 static int url_allowed(const char *url) {
     static const char *hosts[] = { "antigravity.google", "edgedl.me.gvt1.com", "dl.google.com",
-                                   "redirector.gvt1.com", NULL };
+                                   "redirector.gvt1.com", "storage.googleapis.com", NULL };
     const char *h, *e;
     size_t len, i;
     if (strncmp(url, "https://", 8) != 0) return 0;
@@ -418,7 +492,11 @@ static int url_allowed(const char *url) {
     while (*e && *e != '/' && *e != ':' && *e != '?') e++;
     len = (size_t)(e - h);
     for (i = 0; hosts[i]; ++i)
-        if (strlen(hosts[i]) == len && !strncmp(h, hosts[i], len)) return 1;
+        if (strlen(hosts[i]) == len && !strncmp(h, hosts[i], len)) {
+            if (!strcmp(hosts[i], "storage.googleapis.com"))   /* only Google's public Antigravity bucket */
+                return strncmp(e, "/antigravity-public/", 20) == 0;
+            return 1;
+        }
     return 0;
 }
 
@@ -433,20 +511,21 @@ static int contains_ci(const char *s, const char *needle) {
 
 static void consider(const char *u, size_t len) {
     char url[2048], ver[64];
-    const char *s, *file;
+    const char *s, *file, *pp;
     size_t i, n;
     int idx;
     if (len == 0 || len >= sizeof url) return;
     memcpy(url, u, len);
     url[len] = '\0';
     if (!strstr(url, "/antigravity")) return;
-    if (!strstr(url, PLAT_A) && !strstr(url, PLAT_B)) return;
+    pp = strstr(url, "/" PLAT_A "/");
+    if (!pp) pp = strstr(url, "/" PLAT_B "/");
+    if (!pp) return;
     n = strlen(url);
     if (n < strlen(PKG_EXT) || strcmp(url + n - strlen(PKG_EXT), PKG_EXT) != 0) return;
-    s = strstr(url, "/stable/");
-    if (!s) return;
-    s += 8;
-    for (i = 0; s[i] && s[i] != '-' && s[i] != '/' && i < sizeof ver - 1; ++i) ver[i] = s[i];
+    s = pp;                              /* version = path component just before the platform */
+    while (s > url && s[-1] != '/') s--;
+    for (i = 0; s + i < pp && s[i] != '-' && i < sizeof ver - 1; ++i) ver[i] = s[i];
     ver[i] = '\0';
     if (!isdigit((unsigned char)ver[0])) return;
     file = strrchr(url, '/') + 1;
@@ -459,15 +538,20 @@ static void consider(const char *u, size_t len) {
 }
 
 static void scan_text(char *t) {
+    static const char *prefixes[] = { "https://edgedl.me.gvt1.com/",
+                                      "https://storage.googleapis.com/antigravity-public/", NULL };
     char *r = t, *w = t, *p;
+    int k;
     while (*r) { if (r[0] == '\\' && r[1] == '/') r++; *w++ = *r++; }   /* unescape \/ */
     *w = '\0';
-    p = t;
-    while ((p = strstr(p, "https://edgedl.me.gvt1.com/")) != NULL) {
-        char *e = p;
-        while (*e && !strchr("\"'<> \t\r\n\\)", *e)) e++;
-        consider(p, (size_t)(e - p));
-        p = (e > p) ? e : p + 1;
+    for (k = 0; prefixes[k]; ++k) {
+        p = t;
+        while ((p = strstr(p, prefixes[k])) != NULL) {
+            char *e = p;
+            while (*e && !strchr("\"'<> \t\r\n\\)", *e)) e++;
+            consider(p, (size_t)(e - p));
+            p = (e > p) ? e : p + 1;
+        }
     }
 }
 
@@ -666,7 +750,11 @@ static int find_binary_dir(const char *dir, const char **names, char *found, siz
     int i;
     for (i = 0; names[i]; ++i) {
         snprintf(child, sizeof child, "%s/%s", dir, names[i]);
-        if (stat(child, &st) == 0 && S_ISREG(st.st_mode)) { snprintf(found, cap, "%s", dir); return 1; }
+        if (stat(child, &st) == 0 && S_ISREG(st.st_mode)) {
+            char res[PATH_MAX + 16];
+            snprintf(res, sizeof res, "%s/resources", dir);
+            if (is_dir(res)) { snprintf(found, cap, "%s", dir); return 1; }
+        }
     }
     if (depth <= 0 || !(d = opendir(dir))) return 0;
     while ((e = readdir(d)) != NULL) {
@@ -846,7 +934,7 @@ static int update_component(int idx) {
     if (idx == C_CLI) return update_cli();
     if (idx == C_SDK) return update_sdk();
     gather(idx, &st, 1);
-    if (st.installed && !state_of(&st, &t) && st.latest[0]) {
+    if (st.installed && !g_archive && !state_of(&st, &t) && st.latest[0]) {
         printf("%s %s is already the latest version.\n", C_NAME[idx], st.ver);
         if (!ask("Reinstall anyway?", 0)) return 1;
     } else if (!st.installed) {
@@ -878,7 +966,7 @@ static int update_needed(Status *all) {
 /* ----------------------------------------------------------------- main */
 
 static void usage(void) {
-    puts("Antigravity Manager v2\n\n"
+    puts("Antigravity Manager v1.0\n\n"
          "  (no arguments)        interactive menu\n"
          "  --check               show status; exit code 10 if something needs attention\n"
          "  --update TARGET       TARGET = app | ide | cli | sdk | all (all = only what needs it)\n"
