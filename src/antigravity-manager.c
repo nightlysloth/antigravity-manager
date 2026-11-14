@@ -1,5 +1,5 @@
 /*
- * Antigravity Manager v1.0 - cross-platform installer/updater for Google's
+ * Antigravity Manager v1.1 - cross-platform installer/updater for Google's
  * Antigravity tools (App, IDE, CLI "agy", Python SDK).
  *
  * What it does
@@ -966,7 +966,7 @@ static int update_needed(Status *all) {
 /* ----------------------------------------------------------------- main */
 
 static void usage(void) {
-    puts("Antigravity Manager v1.0\n\n"
+    puts("Antigravity Manager v1.1\n\n"
          "  (no arguments)        interactive menu\n"
          "  --check               show status; exit code 10 if something needs attention\n"
          "  --update TARGET       TARGET = app | ide | cli | sdk | all (all = only what needs it)\n"
